@@ -18,12 +18,13 @@ my(%option);
 if ($option_parser -> getoptions
 (
 	\%option,
+	'bind_attributes=i',
+	'cooked_tree_file=s',
 	'help',
 	'logger=s',
 	'marpa_bnf_file=s',
 	'maxlevel=s',
 	'minlevel=s',
-	'no_attributes=i',
 	'raw_tree_file=s',
 	'user_bnf_file=s',
 ) )
@@ -45,27 +46,42 @@ __END__
 
 =head1 NAME
 
-g2p.pl - Convert a Marpa grammar into a tree using Tree::DAG_Node.
+bnf2tree.pl - Convert a Marpa grammar into a tree using Tree::DAG_Node.
 
 =head1 SYNOPSIS
 
-g2p.pl [options]
+bnf2tree.pl [options]
 
 	Options:
+	-bind_attributes Boolean
+	-cooked_tree_file aTextFileName
 	-help
 	-logger aLog::HandlerObject
 	-maxlevel logOption1
 	-minlevel logOption2
-	-no_attributes Boolean
-	-marpa_bnf_file aMarpaBNFFileName
+	-marpa_bnf_file aMarpaSLIF-DSLFileName
 	-raw_tree_file aTextFileName
-	-user_bnf_file aUserGrammarFileName
+	-user_bnf_file aUserSLIF-DSLFileName
 
 Exit value: 0 for success, 1 for failure. Die upon error.
 
 =head1 OPTIONS
 
 =over 4
+
+=item o -bind_attributes Boolean
+
+Include (1) or exclude (0) attributes in the tree file(s) output.
+
+Default: 0.
+
+=item o -cooked_tree_file aTextFileName
+
+The name of the text file to write containing the grammar as a cooked tree.
+
+If '', the file is not written.
+
+Default: ''.
 
 =item o -help
 
@@ -79,9 +95,9 @@ Set this to '' to stop logging.
 
 Default: undef.
 
-=item o -marpa_bnf_file aMarpaBNFFileName
+=item o -marpa_bnf_file aMarpaSLIF-DSLFileName
 
-Specify the name of Marpa's own BNF file.
+Specify the name of Marpa's own SLIF-DSL file.
 
 This file ships with L<Marpa::R2>, in the meta/ directory. It's name is metag.bnf.
 
@@ -111,12 +127,6 @@ Default: 'error'.
 
 No lower levels are used.
 
-=item o -no_attributes Boolean
-
-Include (0) or exclude (1) attributes in the tree_file output.
-
-Default: 0.
-
 =item o -raw_tree_file aTextFileName
 
 The name of the text file to write containing the grammar as a raw tree.
@@ -125,7 +135,7 @@ If '', the file is not written.
 
 Default: ''.
 
-=item o -user_bnf_file aUserGrammarFileName
+=item o -user_bnf_file aUserSLIF-DSLFileName
 
 Specify the name of the file containing your Marpa::R2-style grammar.
 

@@ -11,7 +11,7 @@ my($previous_level) = - 1;
 my($current_node);
 my(%node_per_level);
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 
 #-------------------------------------------------
 
@@ -61,6 +61,11 @@ sub node
 		$token = $1;
 		$type  = 'Marpa';
 	}
+	elsif ($element_value =~ /^\d+$/)
+	{
+		$token = $element_value;
+		$type  = 'Marpa';
+	}
 	else
 	{
 		$token = $element;
@@ -69,12 +74,12 @@ sub node
 
 	my($new_node) = Tree::DAG_Node -> new
 	({
-		attributes => {level => $level + 1, type => $type},
+		attributes => {type => $type},
 		name       => $token,
 	});
 
 	# This test works for the very first call because the initial value of $previous_level is < 0.
-	# Also, $current_node is unchanged by this if when $level == $previous_level.
+	# Also, $current_node is unchanged by this 'if' when $level == $previous_level.
 
 	if ($level > $previous_level)
 	{
