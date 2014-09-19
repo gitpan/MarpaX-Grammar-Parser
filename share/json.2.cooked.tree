@@ -4,6 +4,8 @@ statements
    |   |---action
    |   |---=>
    |   |---::array
+   |---lexeme default
+   |   |---=
    |---:start
    |   |---::=
    |   |---json

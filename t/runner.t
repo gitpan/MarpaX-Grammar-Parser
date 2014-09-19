@@ -1,14 +1,12 @@
 use strict;
 use warnings;
 
-use Algorithm::Diff;
-
+use File::Slurp; # For read_file().
 use File::Temp;
 
 use MarpaX::Grammar::Parser;
 
 use Path::Tiny;   # For path().
-use Perl6::Slurp; # For slurp().
 
 use Test::More;
 
@@ -43,7 +41,7 @@ sub process
 
 	$parser -> run;
 
-	is(slurp("$orig_file_name", {utf8 => 1}), slurp("$tree_file_name", {utf8 => 1}), "$file_name: Output tree matches shipped tree");
+	is(scalar read_file("$orig_file_name", binmode => ':utf8'), scalar read_file("$tree_file_name", binmode => ':utf8'), "$file_name: Output tree matches shipped tree");
 
 } # End of process.
 
@@ -51,11 +49,17 @@ sub process
 
 BEGIN {use_ok('MarpaX::Grammar::Parser'); }
 
+my($count) = 1;
+
 # We omit c.ast only because it takes 7 seconds to process.
 
 for (qw/json.1 json.2 stringparser termcap.info/)
 {
 	process($_);
+
+	$count += 5;
 }
+
+print "# Internal test count: $count. \n";
 
 done_testing;

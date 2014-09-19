@@ -1,5 +1,17 @@
 Revision history for Perl extension MarpaX::Grammar::Parser.
 
+1.03  Fri Sep 19 11:40:00 2014
+	- Handle new Marpa output (from when it dumps its own grammar).
+	- Update Build.PL and Makefile.PL about this module being on github.
+	- Re-generate share/*.[cooked,raw].*.
+
+1.02  Tue Sep  9 09:57:00 2014
+	- Remove redundant Algorithm::Diff from t/runner.t.
+	- Switch from Perl6::Slurp to File::Slurp.
+	- Update copy of Marpa's metag.bnf.
+	- Add share/json.3.bnf.
+	- Re-generate share/*.[cooked,raw].*.
+
 1.01  Fri Aug 16 14:53:00 2013
 	- Explicitly test for the files marpa_bnf_file and user_bnf_file. Die if missing.
 	- Patch Data::TreeDumper::Renderer::Marpa. The first 2 daughters of each node are the start and end offsets

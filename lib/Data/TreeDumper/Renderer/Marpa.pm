@@ -1,8 +1,11 @@
 package Data::TreeDumper::Renderer::Marpa;
 
-use 5.006;
 use strict;
+use utf8;
 use warnings;
+use warnings  qw(FATAL utf8);    # Fatalize encoding glitches.
+use open      qw(:std :utf8);    # Undeclared streams in UTF-8.
+use charnames qw(:full :short);  # Unneeded in v5.16.
 
 use Tree::DAG_Node;
 
@@ -11,7 +14,7 @@ my($previous_level) = - 1;
 my($current_node);
 my(%node_per_level);
 
-our $VERSION = '1.01';
+our $VERSION = '1.03';
 
 #-------------------------------------------------
 
@@ -52,6 +55,23 @@ sub node
 {
 	my($element, $level, $is_terminal, $previous_level_separator, $separator, $element_name,
 		$element_value, $td_address, $address_link, $perl_size, $perl_address, $setup) = @_ ;
+	$element = '' if (! defined $element); # In case it's undef.
+
+	if (0)
+	{
+		print "element:                  $element. \n";
+		print "level:                    $level. \n";
+		print "is_terminal:              $is_terminal. \n";
+		print "previous_level_separator: $previous_level_separator. \n";
+		print "separator:                $separator. \n";
+		print "element_name:             $element_name. \n";
+		print "element_value:            $element_value. \n";
+		print "td_address:               $td_address. \n";
+		print "address_link:             $address_link. \n";
+		print "perl_size:                $perl_size. \n";
+		print "perl_address:             $perl_address. \n";
+		print "setup:                    $setup. \n";
+	}
 
 	my($token);
 	my($type);
