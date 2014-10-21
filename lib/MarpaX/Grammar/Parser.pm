@@ -7,10 +7,13 @@ use warnings  qw(FATAL utf8);    # Fatalize encoding glitches.
 use open      qw(:std :utf8);    # Undeclared streams in UTF-8.
 use charnames qw(:full :short);  # Unneeded in v5.16.
 
+use Data::Dumper::Concise;             # For Dumper().
 use Data::TreeDumper ();               # For DumpTree().
 use Data::TreeDumper::Renderer::Marpa; # Used by DumpTree().
 
 use File::Slurp; # For read_file().
+
+use List::AllUtils qw/any max/;
 
 use Log::Handler;
 
@@ -20,11 +23,13 @@ use Moo;
 
 use Tree::DAG_Node;
 
+use Types::Standard qw/Any Bool HashRef Str/;
+
 has bind_attributes =>
 (
 	default  => sub{return 0},
 	is       => 'rw',
-	#isa     => 'Bool',
+	isa      => Bool,
 	required => 0,
 );
 
@@ -32,7 +37,7 @@ has cooked_tree =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Tree::DAG_Node',
+	isa      => Any,
 	required => 0,
 );
 
@@ -40,7 +45,15 @@ has cooked_tree_file =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Str',
+	isa      => Str,
+	required => 0,
+);
+
+has first_rule =>
+(
+	default  => sub{return ''},
+	is       => 'rw',
+	isa      => Str,
 	required => 0,
 );
 
@@ -48,7 +61,7 @@ has logger =>
 (
 	default  => sub{return undef},
 	is       => 'rw',
-#	isa      => 'Str',
+	isa      => Any,
 	required => 0,
 );
 
@@ -56,15 +69,15 @@ has marpa_bnf_file =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Str',
+	isa      => Str,
 	required => 0,
 );
 
 has maxlevel =>
 (
-	default  => sub{return 'info'},
+	default  => sub{return 'notice'},
 	is       => 'rw',
-#	isa      => 'Str',
+	isa      => Str,
 	required => 0,
 );
 
@@ -72,7 +85,15 @@ has minlevel =>
 (
 	default  => sub{return 'error'},
 	is       => 'rw',
-#	isa      => 'Str',
+	isa      => Str,
+	required => 0,
+);
+
+has output_hashref =>
+(
+	default  => sub{return 0},
+	is       => 'rw',
+	isa      => Bool,
 	required => 0,
 );
 
@@ -80,7 +101,7 @@ has raw_tree =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Tree::DAG_Node',
+	isa      => Any,
 	required => 0,
 );
 
@@ -88,7 +109,15 @@ has raw_tree_file =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Str',
+	isa      => Str,
+	required => 0,
+);
+
+has statements =>
+(
+	default  => sub{return {} },
+	is       => 'rw',
+	isa      => HashRef,
 	required => 0,
 );
 
@@ -96,13 +125,13 @@ has user_bnf_file =>
 (
 	default  => sub{return ''},
 	is       => 'rw',
-	#isa     => 'Str',
+	isa      => Str,
 	required => 0,
 );
 
 # Warning: There's another $VERSION in package MarpaX::Grammar::Parser::Dummy below.
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 # ------------------------------------------------
 
@@ -110,8 +139,8 @@ sub BUILD
 {
 	my($self)  = @_;
 
-	die "No Marpa SLIF-DSL file found\n" if (! -e $self -> marpa_bnf_file);
-	die "No user SLIF-DSL file found\n"  if (! -e $self -> user_bnf_file);
+	die "No Marpa BNF file found\n" if (! -e $self -> marpa_bnf_file);
+	die "No user BNF file found\n"  if (! -e $self -> user_bnf_file);
 
 	if (! defined $self -> logger)
 	{
@@ -145,6 +174,112 @@ sub BUILD
 	);
 
 } # End of BUILD.
+
+# ------------------------------------------------
+
+sub _build_hashref
+{
+	my($self) = @_;
+
+	my($name, @name);
+	my(@stack);
+
+	$self -> raw_tree -> walk_down
+	({
+		callback => sub
+		{
+			my($node, $option) = @_;
+			$name = $node -> name;
+
+			return 1 if ( (length($name) == 0) || ($name =~ /^\d+$/) );
+
+			@name = ();
+
+			while ($node -> is_root == 0)
+			{
+				push @name, $name;
+
+				$node = $node -> mother;
+				$name = $node -> name;
+			}
+
+			push @stack, join('|', reverse @name) if ($#name >= 0);
+
+			return 1; # Keep walking.
+		},
+		_depth => 0,
+	});
+
+	@stack = sort @stack;
+
+	my($ref);
+	my(%statements);
+
+	for my $i (0 .. $#stack)
+	{
+		@name           = split(/\|/, $stack[$i]);
+		$ref            = \%statements;
+		$$ref{$name[0]} = {} if (! $$ref{$name[0]});
+
+		for my $j (1 .. $#name)
+		{
+			if ($j < $#name)
+			{
+				$ref             = $$ref{$name[$j - 1]};
+				$$ref{$name[$j]} = {} if (! ref $$ref{$name[$j]});
+			}
+			else
+			{
+				$$ref{$name[$j - 1]}            = {} if (! ref $$ref{$name[$j - 1]});
+				$$ref{$name[$j - 1]}{$name[$j]} = 1;
+			}
+		}
+	}
+
+	$self -> statements($statements{statement});
+
+} # End of _build_hashref.
+
+# --------------------------------------------------
+
+sub _check_start_rule
+{
+	my($self)  = @_;
+	my($start) = '';
+
+	my($name);
+
+	$self -> raw_tree -> walk_down
+	({
+		callback => sub
+		{
+			my($node, $option) = @_;
+
+			# Skip the first 2 daughters, which hold offsets for the
+			# start and end of the token within the input stream.
+
+			return 1 if ($node -> my_daughter_index < 2);
+
+			# Skip any rules which are not the start rule.
+
+			return 1 if ( ($$option{_depth} != 2) || ($node -> mother -> name ne 'statement') );
+
+			$name = $node -> name;
+
+			return 1 if ($name ne 'start_rule');
+
+			# Got it!
+
+			$start = $name;
+
+			return 0; # Stop walking.
+		},
+		_depth => 0,
+	});
+
+	return $start;
+
+} # End of _check_start_rule.
 
 # --------------------------------------------------
 
@@ -195,7 +330,11 @@ sub compress_branch
 			my($node, $option) = @_;
 			$name = $node -> name;
 
-			if ($name eq 'default_rule')
+			if ($name eq 'completion_event_declaration')
+			{
+				$token = $self -> _process_completion_event_rule($index, $node);
+			}
+			elsif ($name eq 'default_rule')
 			{
 				$token = $self -> _process_default_rule($index, $node);
 			}
@@ -207,10 +346,6 @@ sub compress_branch
 			{
 				$token = $self -> _process_empty_rule($index, $node);
 			}
-			elsif ($name =~ /(.+)_event_declaration$/)
-			{
-				$token = $self -> _process_event_declaration($index, $node, $1);
-			}
 			elsif ($name eq 'lexeme_default_statement')
 			{
 				$token = $self -> _process_lexeme_default($index, $node);
@@ -218,6 +353,14 @@ sub compress_branch
 			elsif ($name eq 'lexeme_rule')
 			{
 				$token = $self -> _process_lexeme_rule($index, $node);
+			}
+			elsif ($name eq 'nulled_event_declaration')
+			{
+				$token = $self -> _process_nulled_event_rule($index, $node);
+			}
+			elsif ($name eq 'prediction_event_declaration')
+			{
+				$token = $self -> _process_predicted_event_rule($index, $node);
 			}
 			elsif ($name eq 'priority_rule')
 			{
@@ -300,6 +443,96 @@ sub compress_tree
 
 # --------------------------------------------------
 
+sub _fabricate_start_rule
+{
+	my($self) = @_;
+
+	# Add a start_rule sub-tree to the cooked tree.
+
+	my($start_rule) = Tree::DAG_Node -> new({name => 'start'});
+
+	$start_rule -> add_daughter(Tree::DAG_Node -> new({name => '::='}) );
+	$start_rule -> add_daughter(Tree::DAG_Node -> new({name => $self -> first_rule}) );
+	$self -> cooked_tree -> add_daughter_left($start_rule);
+
+} # End of _fabricate_start_rule.
+
+# --------------------------------------------------
+
+sub _find_start_rule
+{
+	my($self, $user_bnf) = @_;
+
+	for my $line (split(/\n/, $user_bnf) )
+	{
+		# We assume the rules all start (at least) on 1 line.
+		# The \w+ will ignore :default, :start, etc.
+
+		if ($line =~ /^\s*(\w+)\s*::=\s*<?[\w]+>?$/)
+		{
+			$self -> first_rule($1);
+
+			last;
+		}
+	}
+
+} # End of _find_start_rule.
+
+# ------------------------------------------------
+
+sub format_hashref
+{
+	my($self, $depth, $hashref) = @_;
+	my(@keys)           = keys %$hashref;
+	my($max_key_length) = max map{length} @keys;
+
+	# If any key points to a hashref, do not try to line up the '=>' vertically,
+	# because the dump of the hashref will make the padding useless.
+
+	my($ref_present) = any {ref $$hashref{$_} } @keys; # $#refs >= 0 ? 1 : 0;
+
+	my($adjust_indent);
+	my($indent);
+	my($key_pad);
+	my($pretty_key);
+	my($line);
+
+	for my $key (sort keys %$hashref)
+	{
+		$indent  = '    ' x $depth;
+		$key_pad = ' ' x ($max_key_length - length($key) + 1);
+
+		# Quote keys which are not word and do not already have quotes.
+
+		if ( ($key =~ /^\w+$/) || ($key =~ /^\'/) )
+		{
+			$pretty_key = $key;
+		}
+		else
+		{
+			$pretty_key = "'$key'";
+		}
+
+		$key_pad = ' ' if ($ref_present);
+		$line    = "$indent$pretty_key$key_pad=>";
+
+		if (ref $$hashref{$key})
+		{
+			$self -> log(info => $line);
+			$self -> log(info => "$indent\{");
+			$self -> format_hashref($depth + 1, $$hashref{$key});
+			$self -> log(info => "$indent},");
+		}
+		else
+		{
+			$self -> log(info => "$line $$hashref{$key},");
+		}
+	}
+
+} # End of format_hashref.
+
+# --------------------------------------------------
+
 sub log
 {
 	my($self, $level, $s) = @_;
@@ -307,6 +540,45 @@ sub log
 	$self -> logger -> log($level => $s) if ($self -> logger);
 
 } # End of log.
+
+# --------------------------------------------------
+
+sub _process_completion_event_rule
+{
+	my($self, $index, $a_node) = @_;
+
+	my($name);
+	my(@token);
+
+	$a_node -> walk_down
+	({
+		callback => sub
+		{
+			my($node, $option) = @_;
+			$name = $node -> name;
+
+			# Skip the first 2 daughters, which hold offsets for the
+			# start and end of the token within the input stream.
+
+			return 1 if ($node -> my_daughter_index < 2);
+
+			if ($node -> mother -> mother -> name eq 'event_name')
+			{
+				push @token, 'event', $name, '=', 'completed';
+			}
+			elsif ($node -> mother -> mother -> name eq 'symbol_name')
+			{
+				push @token, $name;
+			}
+
+			return 1; # Keep walking.
+		},
+		_depth => 0,
+	});
+
+	return [@token];
+
+} # End of _process_completion_event_rule.
 
 # --------------------------------------------------
 
@@ -375,7 +647,7 @@ sub _process_discard_rule
 
 			if ($node -> mother -> mother -> name eq 'symbol_name')
 			{
-				push @token, ':discard', '=>', {$node -> mother -> name => $name};
+				push @token, ':discard', '~', {$node -> mother -> name => $name};
 			}
 
 			return 1; # Keep walking.
@@ -414,7 +686,7 @@ sub _process_empty_rule
 			}
 			elsif ($node -> mother -> mother -> name eq 'symbol_name')
 			{
-				push @token, {$node -> mother -> name => $name};
+				push @token, $name;
 			}
 
 			return 1; # Keep walking.
@@ -428,58 +700,15 @@ sub _process_empty_rule
 
 # --------------------------------------------------
 
-sub _process_event_declaration
-{
-	my($self, $index, $a_node, $type) = @_;
-	my(%type) =
-	(
-		completion => 'completed',
-		nulled     => 'nulled',
-		prediction => 'predicted',
-	);
-
-	my($name);
-	my(@token);
-
-	$a_node -> walk_down
-	({
-		callback => sub
-		{
-			my($node, $option) = @_;
-			$name = $node -> name;
-
-			# Skip the first 2 daughters, which hold offsets for the
-			# start and end of the token within the input stream.
-
-			return 1 if ($node -> my_daughter_index < 2);
-
-			if ($node -> mother -> mother -> name eq 'event_name')
-			{
-				push @token, 'event', $name, '=', $type{$type};
-			}
-			elsif ($node -> mother -> mother -> name eq 'symbol_name')
-			{
-				push @token, {$node -> mother -> name => $name};
-			}
-
-			return 1; # Keep walking.
-		},
-		_depth => 0,
-	});
-
-	return [@token];
-
-} # End of _process_event_declaration.
-
-# --------------------------------------------------
-
 sub _process_lexeme_default
 {
 	my($self, $index, $a_node) = @_;
 	my(%map) =
 	(
-		action   => 'action',
-		blessing => 'bless',
+		action             => 'action',
+		blessing           => 'bless',
+		forgiving          => 'latm',
+		latm_specification => 'latm',
 	);
 	my(@token) = ('lexeme default', '=');
 
@@ -501,6 +730,10 @@ sub _process_lexeme_default
 			{
 				push @token, $map{$1}, '=>', $name;
 			}
+			elsif ($node -> mother -> mother -> name eq 'latm_specification')
+			{
+				push @token, $map{latm_specification}, '=>', $name;
+			}
 
 			return 1; # Keep walking.
 		},
@@ -516,6 +749,12 @@ sub _process_lexeme_default
 sub _process_lexeme_rule
 {
 	my($self, $index, $a_node) = @_;
+	my(%map) =
+	(
+		event_name             => 'event',
+		pause_specification    => 'pause',
+		priority_specification => 'priority',
+	);
 	my(@token) = (':lexeme', '~');
 
 	my($name);
@@ -532,21 +771,13 @@ sub _process_lexeme_rule
 
 			return 1 if ($node -> my_daughter_index < 2);
 
-			if ($node -> mother -> mother -> name eq 'event_name')
+			if ($node -> mother -> mother -> name =~ /(event_name|pause_specification|priority_specification)/)
 			{
-				push @token, 'event', '=>', $name;
-			}
-			elsif ($node -> mother -> mother -> name eq 'pause_specification')
-			{
-				push @token, 'pause', '=>', $name;
-			}
-			elsif ($node -> mother -> mother -> name eq 'priority_specification')
-			{
-				push @token, 'priority', '=>', $name;
+				push @token, $map{$1}, '=>', $name;
 			}
 			elsif ($node -> mother -> mother -> name eq 'symbol_name')
 			{
-				push @token, {$node -> mother -> name => $name};
+				push @token, $name;
 			}
 
 			return 1; # Keep walking.
@@ -557,6 +788,45 @@ sub _process_lexeme_rule
 	return [@token];
 
 } # End of _process_lexeme_rule.
+
+# --------------------------------------------------
+
+sub _process_nulled_event_rule
+{
+	my($self, $index, $a_node) = @_;
+
+	my($name);
+	my(@token);
+
+	$a_node -> walk_down
+	({
+		callback => sub
+		{
+			my($node, $option) = @_;
+			$name = $node -> name;
+
+			# Skip the first 2 daughters, which hold offsets for the
+			# start and end of the token within the input stream.
+
+			return 1 if ($node -> my_daughter_index < 2);
+
+			if ($node -> mother -> mother -> name eq 'event_name')
+			{
+				push @token, 'event', $name, '=', 'nulled';
+			}
+			elsif ($node -> mother -> mother -> name eq 'symbol_name')
+			{
+				push @token, $name;
+			}
+
+			return 1; # Keep walking.
+		},
+		_depth => 0,
+	});
+
+	return [@token];
+
+} # End of _process_nulled_event_rule.
 
 # --------------------------------------------------
 
@@ -598,11 +868,54 @@ sub _process_parenthesized_list
 
 # --------------------------------------------------
 
-sub _process_priority_rule
+sub _process_predicted_event_rule
 {
 	my($self, $index, $a_node) = @_;
 
-	my($alternative_count) = 0;
+	my($name);
+	my(@token);
+
+	$a_node -> walk_down
+	({
+		callback => sub
+		{
+			my($node, $option) = @_;
+			$name = $node -> name;
+
+			# Skip the first 2 daughters, which hold offsets for the
+			# start and end of the token within the input stream.
+
+			return 1 if ($node -> my_daughter_index < 2);
+
+			if ($node -> mother -> mother -> name eq 'event_name')
+			{
+				push @token, 'event', $name, '=', 'predicted';
+			}
+			elsif ($node -> mother -> mother -> name eq 'symbol_name')
+			{
+				push @token, $name;
+			}
+
+			return 1; # Keep walking.
+		},
+		_depth => 0,
+	});
+
+	return [@token];
+
+} # End of _process_predicted_event_rule.
+
+# --------------------------------------------------
+
+sub _process_priority_rule
+{
+	my($self, $index, $a_node) = @_;
+	my($alternative_count)     = 0;
+	my(%map)                   =
+	(
+		action   => 'action',
+		blessing => 'bless',
+	);
 
 	my($continue);
 	my($depth_under);
@@ -622,19 +935,15 @@ sub _process_priority_rule
 
 			return 1 if ($node -> my_daughter_index < 2);
 
-			if ($node -> mother -> mother -> name eq 'action_name')
+			if ($node -> mother -> mother -> name =~ /(action|blessing)_name/)
 			{
-				push @token, 'action', '=>', $name;
+				push @token, $map{$1}, '=>', $name;
 			}
 			elsif ($name eq 'alternative')
 			{
 				$alternative_count++;
 
 				push @token, '|' if ($alternative_count > 1);
-			}
-			elsif ($node -> mother -> mother -> name eq 'blessing_name')
-			{
-				push @token, 'bless', '=>', $name;
 			}
 			elsif ($node -> mother -> name eq 'character_class')
 			{
@@ -655,7 +964,7 @@ sub _process_priority_rule
 			{
 				push @token, 'rank', '=>', $name;
 			}
-			elsif ($node -> mother -> mother -> name eq 'separator_specification')
+			elsif ($node eq 'separator_specification')
 			{
 				push @token, 'separator', '=>';
 			}
@@ -769,6 +1078,20 @@ sub _process_start_rule
 
 # ------------------------------------------------
 
+sub report_hashref
+{
+	my($self) = @_;
+
+	$self -> format_hashref(0, $self -> statements);
+
+	# Return 0 for success and 1 for failure.
+
+	return 0;
+
+} # End of report_hashref.
+
+# ------------------------------------------------
+
 sub run
 {
 	my($self)          = @_;
@@ -778,6 +1101,7 @@ sub run
 	my $user_bnf       = read_file($self -> user_bnf_file, binmode =>':utf8');
 	my($recce)         = Marpa::R2::Scanless::R -> new({grammar => $marpa_grammar});
 
+	$self -> _find_start_rule($user_bnf);
 	$recce -> read(\$user_bnf);
 
 	my($value) = $recce -> value;
@@ -813,6 +1137,17 @@ sub run
 
 	$self -> compress_tree;
 
+	if ($self -> _check_start_rule eq '')
+	{
+		$self -> _fabricate_start_rule;
+	}
+
+	if ($self -> output_hashref)
+	{
+		$self -> _build_hashref;
+		$self -> report_hashref;
+	}
+
 	my($cooked_tree_file) = $self -> cooked_tree_file;
 
 	if ($cooked_tree_file)
@@ -844,7 +1179,7 @@ sub new{return {};}
 
 =head1 NAME
 
-C<MarpaX::Grammar::Parser> - Converts a Marpa grammar into a forest using Tree::DAG_Node
+C<MarpaX::Grammar::Parser> - Converts a Marpa grammar into a tree using Tree::DAG_Node
 
 =head1 Synopsis
 
@@ -861,30 +1196,25 @@ C<MarpaX::Grammar::Parser> - Converts a Marpa grammar into a forest using Tree::
 
 	MarpaX::Grammar::Parser -> new(%option) -> run;
 
-See share/*.bnf for input files and share/*.tree for output files.
-
 For more help, run:
 
-	shell> perl -Ilib scripts/bnf2tree.pl -h
+	 scripts/bnf2tree.pl -h
 
 See share/*.bnf for input files and share/*.tree for output files.
 
-Note: Installation includes copying all files from the share/ directory, into a dir chosen by L<File::ShareDir>.
-Run scripts/find.grammars.pl to display the name of the latter dir.
+Installation includes copying all files from the share/ directory, into a dir chosen by
+L<File::ShareDir>. Run scripts/find.grammars.pl to display the name of that dir.
 
-Note: The cooked tree can be graphed with L<MarpaX::Grammar::GraphViz2>. That module has its own
+The cooked tree can be graphed with L<MarpaX::Grammar::GraphViz2>. That module has its own
 L<demo page|http://savage.net.au/Perl-modules/html/marpax.grammar.graphviz2/index.html>.
 
 =head1 Description
 
-C<MarpaX::Grammar::Parser> uses L<Marpa::R2> to convert a user's SLIF-DSL into a tree of Marpa-style attributes,
-(see L</raw_tree()>), and then post-processes that (see L</compress_tree()>) to create another tree, this time
-containing just the original grammar (see L</cooked_tree()>).
+C<MarpaX::Grammar::Parser> uses L<Marpa::R2> to convert a user's BNF into a tree of
+Marpa-style attributes, (see L</raw_tree()>), and then post-processes that (see L</compress_tree()>)
+to create another tree, this time containing just the original grammar (see L</cooked_tree()>).
 
-So, currently, the forest contains just 2 trees, acessible via the methods L</raw_tree()> and L</cooked_tree()>.
-The nature of these trees is discussed in the L</FAQ>.
-
-These trees are managed by L<Tree::DAG_Node>.
+The nature of these trees is discussed in the L</FAQ>. The trees are managed by L<Tree::DAG_Node>.
 
 Lastly, the major purpose of the cooked tree is to serve as input to L<MarpaX::Grammar::GraphViz2>.
 
@@ -914,9 +1244,6 @@ or:
 	make test
 	make install
 
-Note: Installation includes copying all files from the share/ directory, into a dir chosen by L<File::ShareDir>.
-Run scripts/find.grammars.pl to display the name of the latter dir.
-
 =head1 Constructor and Initialization
 
 C<new()> is called as C<< my($parser) = MarpaX::Grammar::Parser -> new(k1 => v1, k2 => v2, ...) >>.
@@ -928,13 +1255,13 @@ Key-value pairs accepted in the parameter list (see also the corresponding metho
 
 =over 4
 
-=item o bind_attributes Boolean
+=item o bind_attributes => Boolean
 
 Include (1) or exclude (0) attributes in the tree file(s) output.
 
 Default: 0.
 
-=item o cooked_tree_file aTextFileName
+=item o cooked_tree_file => aTextFileName
 
 The name of the text file to write containing the grammar as a cooked tree.
 
@@ -944,10 +1271,9 @@ Default: ''.
 
 Note: The bind_attributes option/method affects the output.
 
-=item o logger aLog::HandlerObject
+=item o logger => aLog::HandlerObject
 
-By default, an object of type L<Log::Handler> is created which prints to STDOUT, but in this version nothing
-is actually printed.
+By default, an object of type L<Log::Handler> is created which prints to STDOUT.
 
 See C<maxlevel> and C<minlevel> below.
 
@@ -955,27 +1281,27 @@ Set C<logger> to '' (the empty string) to stop a logger being created.
 
 Default: undef.
 
-=item o marpa_bnf_file aMarpaSLIF-DSLFileName
+=item o marpa_bnf_file => aMarpaBNFFileName
 
-Specify the name of Marpa's own SLIF-DSL file. This file ships with L<Marpa::R2>. It's name is metag.bnf.
-
-A copy, as of Marpa::R2 V 2.068000, ships with C<MarpaX::Grammar::Parser>. See share/metag.bnf.
+Specify the name of Marpa's own BNF file. This distro ships it as share/metag.bnf.
 
 This option is mandatory.
 
 Default: ''.
 
-=item o maxlevel logOption1
+=item o maxlevel => $level
+
+This option is only used if this module creates an object of type L<Log::Handler>.
+
+See L<Log::Handler::Levels>.
+
+Nothing is printed by default.
+
+Default: 'notice'.
+
+=item o minlevel => $level
 
 This option affects L<Log::Handler> objects.
-
-See the L<Log::Handler::Levels> docs.
-
-Default: 'info'.
-
-=item o minlevel logOption2
-
-This option affects L<Log::Handler> object.
 
 See the L<Log::Handler::Levels> docs.
 
@@ -983,7 +1309,15 @@ Default: 'error'.
 
 No lower levels are used.
 
-=item o raw_tree_file aTextFileName
+=item o output_hashref Boolean
+
+Log (1) or skip (0) the hashref version of the raw tree.
+
+Note: This needs -maxlevel elevated from its default value of 'notice' to 'info', to do anything.
+
+Default: 0.
+
+=item o raw_tree_file => aTextFileName
 
 The name of the text file to write containing the grammar as a raw tree.
 
@@ -993,7 +1327,7 @@ Default: ''.
 
 Note: The bind_attributes option/method affects the output.
 
-=item o user_bnf_file aUserSLIF-DSLFileName
+=item o user_bnf_file => aUserBNFFileName
 
 Specify the name of the file containing your Marpa::R2-style grammar.
 
@@ -1011,8 +1345,8 @@ Default: ''.
 
 Here, the [] indicate an optional parameter.
 
-Get or set the option which includes (1) or excludes (0) node attributes from the output C<cooked_tree_file>
-and C<raw_tree_file>.
+Get or set the option which includes (1) or excludes (0) node attributes from the output
+C<cooked_tree_file> and C<raw_tree_file>.
 
 Note: C<bind_attributes> is a parameter to new().
 
@@ -1061,9 +1395,11 @@ Output is the tree returned by L</cooked_tree()>.
 
 Returns the root node, of type L<Tree::DAG_Node>, of the cooked tree of items in the user's grammar.
 
-By cooked tree, I mean as post-processed from the raw tree so as to include just the original user's SLIF-DSL tokens.
+By cooked tree, I mean as post-processed from the raw tree so as to include just the original user's
+BNF tokens.
 
-The cooked tree is optionally written to the file name given by L</cooked_tree_file([$output_file_name])>.
+The cooked tree is optionally written to the file name given by
+L</cooked_tree_file([$output_file_name])>.
 
 The nature of this tree is discussed in the L</FAQ>.
 
@@ -1077,13 +1413,33 @@ Get or set the name of the file to which the cooked tree form of the user's gram
 
 If no output file is supplied, nothing is written.
 
-See share/stringparser.cooked.tree for the output of post-processing Marpa's analysis of share/stringparser.bnf.
+See share/stringparser.cooked.tree for the output of post-processing Marpa's analysis of
+share/stringparser.bnf.
 
 This latter file is the grammar used in L<MarpaX::Demo::StringParser>.
 
 Note: C<cooked_tree_file> is a parameter to new().
 
 Note: The bind_attributes option/method affects the output.
+
+=head2 first_rule()
+
+Returns the first G1-level rule in the user's gramamr. This is used to fabricate a start rule if
+'start_rule' is not found in the cooked tree. This new node is not in the raw tree, but only in
+the cooked tree, and hence in the hashref version of the cooked tree.
+
+The presence of a start rule helps L<MarpaX::Grammar::GraphViz2> generate the grammar's image.
+
+=head2 format_hashref($depth, $hashref)
+
+Formats the given hashref, with $depth (starting from 0) used to indent the output.
+
+Outputs using calls to L</log($level, $s)>.
+
+When you call L</report_hashref()>, it calls
+C<< $self -> format_hashref(0, $self -> statements) >>.
+
+End users would normally never call this method, nor override it. Just call L</report_hashref()>.
 
 =head2 log($level, $s)
 
@@ -1107,29 +1463,43 @@ Get or set the name of the file to read Marpa's grammar from.
 
 Note: C<marpa_bnf_file> is a parameter to new().
 
-=head2 maxlevel([$string])
+=head2 maxlevel([$$level])
 
 Here, the [] indicate an optional parameter.
 
 Get or set the value used by the logger object.
 
-This option is only used if an object of type L<Log::Handler> is created. See L<Log::Handler::Levels>.
+This option is only used if an object of type L<Log::Handler> is created.
+See L<Log::Handler::Levels>.
 
 Note: C<maxlevel> is a parameter to new().
 
-=head2 minlevel([$string])
+=head2 minlevel([$$level])
 
 Here, the [] indicate an optional parameter.
 
 Get or set the value used by the logger object.
 
-This option is only used if an object of type L<Log::Handler> is created. See L<Log::Handler::Levels>.
+This option is only used if an object of type L<Log::Handler> is created.
+See L<Log::Handler::Levels>.
 
 Note: C<minlevel> is a parameter to new().
 
 =head2 new()
 
 The constructor. See L</Constructor and Initialization>.
+
+=head2 output_hashref([$Boolean])
+
+Here, the [] indicate an optional parameter.
+
+Get or set the option to log (1) or exclude (0) a hashref version of the raw tree.
+
+This hashref can be output by calling L</new()> as C<< new(max => 'info', output_hashref => 1) >>.
+
+See also L</statements()>.
+
+Note: C<output_hashref> is a parameter to new().
 
 =head2 raw_tree()
 
@@ -1159,18 +1529,39 @@ Note: C<raw_tree_file> is a parameter to new().
 
 Note: The bind_attributes option/method affects the output.
 
+=head2 report_hashref()
+
+Outputs the hashref version of the raw tree to the logger.
+
+It does this by calling C<< $self -> format_hashref(0, $self -> statements) >>, which in turn uses
+the logger provided in the call to L</new()>.
+
+See L</format_hashref($depth, $hashref)>.
+
+C<report_hashref()> returns 0 for success and 1 for failure.
+
 =head2 run()
 
 The method which does all the work.
 
 See L</Synopsis> and scripts/bnf2tree.pl for sample code.
 
+run() returns 0 for success and 1 for failure.
+
+=head2 statements()
+
+Returns a hashref describing the grammar provided in the user_bnf_file parameter to L</new()>.
+
+The L</FAQ> discusses the format of this hashref.
+
+See also L</output_hashref()>.
+
 =head2 user_bnf_file([$bnf_file_name])
 
 Here, the [] indicate an optional parameter.
 
-Get or set the name of the file to read the user's grammar's SLIF-DSL from. The whole file is slurped in as
-a single string.
+Get or set the name of the file to read the user's grammar's BNF from. The whole file is
+slurped in as a single string.
 
 See share/stringparser.bnf for a sample. It is the grammar used in L<MarpaX::Demo::StringParser>.
 
@@ -1194,16 +1585,16 @@ This is the output from post-processing Marpa's analysis of share/c.ast.bnf.
 
 The command to generate this file is:
 
-	shell> scripts/bnf2tree.sh c.ast
+	scripts/bnf2tree.sh c.ast
 
 =item o share/c.ast.raw.tree
 
-This is the output from processing Marpa's analysis of share/c.ast.bnf. It's 56,723 lines long, which indicates
-the complexity of Jean-Damien's grammar for C.
+This is the output from processing Marpa's analysis of share/c.ast.bnf. It's 56,723 lines long,
+which indicates the complexity of Jean-Damien's grammar for C.
 
 The command to generate this file is:
 
-	shell> scripts/bnf2tree.sh c.ast
+	scripts/bnf2tree.sh c.ast
 
 =item o share/json.1.bnf
 
@@ -1211,83 +1602,78 @@ It is part of L<MarpaX::Demo::JSONParser>, written as a gist by Peter Stuifzand.
 
 See L<https://gist.github.com/pstuifzand/4447349>.
 
+The command to process this file is:
+
+	scripts/bnf2tree.sh json.1
+
 The outputs are share/json.1.cooked.tree and share/json.1.raw.tree.
-
-=item o share/json.1.cooked.tree
-
-This is the output from post-processing Marpa's analysis of share/json.1.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh json.1
-
-=item o share/json.1.raw.tree
-
-This is the output from processing Marpa's analysis of share/json.1.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh json.1
 
 =item o share/json.2.bnf
 
-It also is part of L<MarpaX::Demo::JSONParser>, written by Jeffrey Kegler as a reply to the gist above from Peter.
+It also is part of L<MarpaX::Demo::JSONParser>, written by Jeffrey Kegler as a reply to the gist
+above from Peter.
+
+The command to process this file is:
+
+	scripts/bnf2tree.sh json.2
 
 The outputs are share/json.2.cooked.tree and share/json.2.raw.tree.
 
-=item o share/json.2.cooked.tree
+=item o share/json.3.bnf
 
-This is the output from post-processing Marpa's analysis of share/json.2.bnf.
+The is yet another JSON grammar written by Jeffrey Kegler.
 
-The command to generate this file is:
+The command to process this file is:
 
-	shell> scripts/bnf2tree.sh json.2
+	scripts/bnf2tree.sh json.3
 
-=item o share/json.2.raw.tree
-
-This is the output from processing Marpa's analysis of share/json.2.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh json.2
+The outputs are share/json.3.cooked.tree and share/json.3.raw.tree.
 
 =item o share/metag.bnf.
 
-This is a copy of L<Marpa::R2>'s SLIF-DSL, as of Marpa::R2 V 2.068000.
+This is a copy of L<Marpa::R2>'s BNF. That is, it's the file which Marpa uses to validate both
+its own metag.bnf (self-reflexively), and any user's BNF file.
 
 See L</marpa_bnf_file([$bnf_file_name])> above.
 
+The command to process this file is:
+
+	scripts/bnf2tree.sh metag
+
+The outputs are share/metag.cooked.tree and share/metag.raw.tree.
+
+=item o share/metag.hashref
+
+Created by:
+
+	scripts/bnf2tree.pl -mar share/metag.bnf -u share/metag.bnf -r share/metag.raw.tree \
+		-max info > share/metag.hashref
+
 =item o share/stringparser.bnf.
 
-This is a copy of L<MarpaX::Demo::StringParser>'s SLIF-DSL.
-
-The outputs are share/stringparser.cooked.tree and share/stringparser.raw.tree.
+This is a copy of L<MarpaX::Demo::StringParser>'s BNF.
 
 See L</user_bnf_file([$bnf_file_name])> above.
 
-=item o share/stringparser.cooked.tree
+The command to process this file is:
 
-This is the output from post-processing Marpa's analysis of share/stringparser.bnf.
+	scripts/bnf2tree.sh stringparser
 
-The command to generate this file is:
+The outputs are share/stringparser.cooked.tree and share/stringparser.raw.tree.
 
-	shell> scripts/bnf2tree.sh stringparser
+=item o share/stringparser.hashref
 
-=item o share/stringparser.raw.tree
+Created by:
 
-This is the output from processing Marpa's analysis of share/stringparser.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh stringparser
-
-See also the next item.
+	scripts/bnf2tree.pl -mar share/stringparser.bnf -u share/stringparser.bnf \
+		-r share/stringparser.raw.tree -max info > share/stringparser.hashref
 
 =item o share/stringparser.treedumper
 
 This is the output of running:
 
-	shell> perl scripts/metag.pl share/metag.bnf share/stringparser.bnf > share/stringparser.treedumper
+	scripts/metag.pl share/metag.bnf share/stringparser.bnf > \
+		share/stringparser.treedumper
 
 That script, metag.pl, is discussed just below, and in the L</FAQ>.
 
@@ -1295,60 +1681,52 @@ That script, metag.pl, is discussed just below, and in the L</FAQ>.
 
 It is part of L<MarpaX::Database::Terminfo>, written by Jean-Damien Durand.
 
-The outputs are share/termcap.cooked.tree and share/termcap.info.raw.tree.
+The command to process this file is:
 
-=item o share/termcap.info.cooked.tree
+	scripts/bnf2tree.sh termcap.info
 
-This is the output from post-processing Marpa's analysis of share/termcap.info.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh termcap.info
-
-=item o share/termcap.info.raw.tree
-
-This is the output from processing Marpa's analysis of share/termcap.info.bnf.
-
-The command to generate this file is:
-
-	shell> scripts/bnf2tree.sh termcap.info
+The outputs are share/termcap.info.cooked.tree and share/termcap.info.raw.tree.
 
 =back
 
 =head2 Scripts
 
+These scripts are all in the scripts/ directory.
+
 =over 4
 
-=item o scripts/bnf2tree.pl
+=item o bnf2tree.pl
 
 This is a neat way of using this module. For help, run:
 
-	shell> perl -Ilib scripts/bnf2tree.pl -h
+	scripts/bnf2tree.pl -h
 
 Of course you are also encouraged to include the module directly in your own code.
 
-=item o scripts/bnf2tree.sh
+=item o bnf2tree.sh
 
 This is a quick way for me to run bnf2tree.pl.
 
-=item o scripts/find.grammars.pl
+=item o find.grammars.pl
 
-This prints the path to a grammar file. After installation of the module, run it with:
+This prints the path to a grammar file. After installation of the module, run it with any of these
+	parameters:
 
-	shell> perl scripts/find.grammars.pl (Defaults to json.1.bnf)
-	shell> perl scripts/find.grammars.pl c.ast.bnf
-	shell> perl scripts/find.grammars.pl json.1.bnf
-	shell> perl scripts/find.grammars.pl json.2.bnf
-	shell> perl scripts/find.grammars.pl stringparser.bnf
-	shell> perl scripts/find.grammars.pl termcap.inf.bnf
+	scripts/find.grammars.pl (Defaults to json.1.bnf)
+	scripts/find.grammars.pl c.ast.bnf
+	scripts/find.grammars.pl json.1.bnf
+	scripts/find.grammars.pl json.2.bnf
+	scripts/find.grammars.pl json.3.bnf
+	scripts/find.grammars.pl stringparser.bnf
+	scripts/find.grammars.pl termcap.inf.bnf
 
 It will print the name of the path to given grammar file.
 
-=item o scripts/metag.pl
+=item o metag.pl
 
 This is Jeffrey Kegler's code. See the L</FAQ> for more.
 
-=item o scripts/pod2html.sh
+=item o pod2html.sh
 
 This lets me quickly proof-read edits to the docs.
 
@@ -1356,17 +1734,18 @@ This lets me quickly proof-read edits to the docs.
 
 =head1 FAQ
 
-=head2 What is this SLIF-DSL thingy?
+=head2 What is this BNF (SLIF-DSL) thingy?
 
-Marpa's grammars are written in what we call a SLIF-DSL. Here, SLIF stands for Marpa's Scanless Interface, and DSL
-is L<Domain-specific Language|https://en.wikipedia.org/wiki/Domain-specific_language>.
+Marpa's grammars are written in what we call a SLIF-DSL. Here, SLIF stands for Marpa's Scanless
+Interface, and DSL is
+L<Domain-specific Language|https://en.wikipedia.org/wiki/Domain-specific_language>.
 
-Many programmers will have heard of L<BNF|https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_Form>. Well, Marpa's
-SLIF-DSL is an extended BNF. That is, it includes special tokens which only make sense within the context of a Marpa
-grammar. Hence the 'Domain Specific' part of the name.
+Many programmers will have heard of L<BNF|https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_Form>.
+Well, Marpa's SLIF-DSL is an extended BNF. That is, it includes special tokens which only make sense
+within the context of a Marpa grammar. Hence the 'Domain Specific' part of the name.
 
-In practice, this means you express your grammar in a string, and Marpa treats that as a set of rules as to how
-you want Marpa to process your input stream.
+In practice, this means you express your grammar in a string, and Marpa treats that as a set of
+rules as to how you want Marpa to process your input stream.
 
 Marpa's docs for its SLIF-DSL L<are here|https://metacpan.org/module/Marpa::R2::Scanless::DSL>.
 
@@ -1375,8 +1754,8 @@ Marpa's docs for its SLIF-DSL L<are here|https://metacpan.org/module/Marpa::R2::
 The raw tree is generated by processing the output of Marpa's parse of the user's grammar file.
 It contains Marpa's view of that grammar.
 
-The cooked tree is generated by post-processing the raw tree, to extract just the user's grammar's tokens.
-It contains the user's view of their grammar.
+The cooked tree is generated by post-processing the raw tree, to extract just the user's grammar's
+tokens. It contains the user's view of their grammar.
 
 The cooked tree can be graphed with L<MarpaX::Grammar::GraphViz2>. That module has its own
 L<demo page|http://savage.net.au/Perl-modules/html/marpax.grammar.graphviz2/index.html>.
@@ -1423,7 +1802,7 @@ Indicates the token's name is or is not of the form '<...>'.
 
 Indicates the token is quantified. $char is one of '', '*' or '+'.
 
-If $char is ' ' (the empty string), the token is not quantified.
+If $char is '' (the empty string), the token is not quantified.
 
 =item o real_name => $string
 
@@ -1439,11 +1818,11 @@ Under the root, there are a set of nodes:
 
 =over 4
 
-=item o One node for the offset of the start of the grammar within the input stream.
+=item o One node for the offset of the start of each grammar statement within the input stream.
 
 The node's name is the integer start offset.
 
-=item o One node for the offset of the end of the grammar within the input stream.
+=item o One node for the offset of the end of each grammar statement within the input stream.
 
 The node's name is the integer end offset.
 
@@ -1454,8 +1833,9 @@ or a Marpa-assigned token (when the attribute 'type' is 'Marpa').
 
 Each node is the root of a subtree describing the statement.
 
-See share/stringparser.raw.attributes.tree for a tree with attributes displayed (bind_attributes => 1), and
-share/stringparser.raw.tree for the same tree without attributes (bind_attributes => 0).
+See share/stringparser.raw.attributes.tree. The tree has attributes displayed using
+(bind_attributes => 1), and share/stringparser.raw.tree for the same tree without attributes
+(bind_attributes => 0).
 
 =back
 
@@ -1477,12 +1857,10 @@ The class name is for the form: $class_name::$node_name.
 
 C<$class_name> is a constant provided by this module, and is 'MarpaX::Grammar::Parser::Dummy'.
 
-See share/stringparser.treedumper, which will make this much clearer.
-
 The technique used to generate this file is discussed above, under L</Data Files>.
 
-Note: The file share/stringparser.treedumper shows some class names, but they are currently I<not> stored
-in the tree returned by the method L</raw_tree()>.
+Note: The file share/stringparser.treedumper shows some class names, but they are currently I<not>
+stored in the tree returned by the method L</raw_tree()>.
 
 =back
 
@@ -1492,7 +1870,27 @@ See share/stringparser.raw.tree.
 
 =head2 Why are attributes used to identify bracketed names?
 
-Because L<dot|http://graphviz.org> assigns a special meaning to labels which begin with '<' and '<<'.
+Because L<dot|http://graphviz.org> assigns a special meaning to labels which begin with '<' and
+'<<'.
+
+=head2 What is the format of the hashref of the cooked tree?
+
+The keys in the hashref are the types of statements found in the grammar, and the values for those
+keys are either '1' to indicate the key exists, or a hashref.
+
+The latter hashref's keys are all the sub-types of statements found in the grammar, for the given
+statement.
+
+The pattern of keys pointing to either '1' or a hashref, is repeated to whatever depth is required
+to represent the tree.
+
+See share/*.hashref for sample output. Instructions for producing this output are detailed under
+L</Data Files>.
+
+=head2 Why did you write your own formatter for the output hashref?
+
+I tried some fine modules (L<Data::Dumper>, L<Data::Dumper::Concise> and L<Data::Dump::Streamer>),
+but even though they may have every option you want, they don't have the options I<I> want.
 
 =head2 How do I sort the daughters of a node?
 
@@ -1504,8 +1902,8 @@ As an example, choose $root as either $self -> cooked_tree or $self -> raw_tree,
 
 	$root -> set_daughters(@daughters);
 
-Note: Since the original order of the daughters, in both the cooked and raw trees, is significant, sorting is
-contra-indicated.
+Note: Since the original order of the daughters, in both the cooked and raw trees, is significant,
+sorting is contra-indicated.
 
 =head2 Where did the basic code come from?
 
@@ -1529,11 +1927,14 @@ Yes, many by its author, and several others. See Marpa's homepage, just above, a
 
 L<The Marpa Guide|http://marpa-guide.github.io/>, (in progress, by Peter Stuifzand and Ron Savage).
 
-L<Parsing a here doc|http://peterstuifzand.nl/2013/04/19/parse-a-heredoc-with-marpa.html>, by Peter Stuifzand.
+L<Parsing a here doc|http://peterstuifzand.nl/2013/04/19/parse-a-heredoc-with-marpa.html>, by Peter
+Stuifzand.
 
-L<An update of parsing here docs|http://peterstuifzand.nl/2013/04/22/changes-to-the-heredoc-parser-example.html>, by Peter Stuifzand.
+L<An update of parsing here docs|http://peterstuifzand.nl/2013/04/22/changes-to-the-heredoc-parser-example.html>,
+by Peter Stuifzand.
 
-L<Conditional preservation of whitespace|http://savage.net.au/Ron/html/Conditional.preservation.of.whitespace.html>, by Ron Savage.
+L<Conditional preservation of whitespace|http://savage.net.au/Ron/html/Conditional.preservation.of.whitespace.html>,
+by Ron Savage.
 
 =head1 See Also
 
@@ -1571,7 +1972,9 @@ L<https://rt.cpan.org/Public/Dist/Display.html?Name=MarpaX::Grammar::Parser>.
 
 L<MarpaX::Grammar::Parser> was written by Ron Savage I<E<lt>ron@savage.net.auE<gt>> in 2013.
 
-Home page: L<http://savage.net.au/>.
+Marpa's homepage: L<http://savage.net.au/Marpa.html>.
+
+Homepage: L<http://savage.net.au/>.
 
 =head1 Copyright
 

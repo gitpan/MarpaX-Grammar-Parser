@@ -25,6 +25,7 @@ if ($option_parser -> getoptions
 	'marpa_bnf_file=s',
 	'maxlevel=s',
 	'minlevel=s',
+	'output_hashref=i',
 	'raw_tree_file=s',
 	'user_bnf_file=s',
 ) )
@@ -33,7 +34,13 @@ if ($option_parser -> getoptions
 
 	# Return 0 for success and 1 for failure.
 
-	exit MarpaX::Grammar::Parser -> new(%option) -> run;
+	my($parser) = MarpaX::Grammar::Parser -> new(%option);
+	my($exit)   = $parser -> run;
+	$exit       = $parser -> report_hashref if ($exit == 0);
+
+	# Return 0 for success and 1 for failure.
+
+	exit $exit;
 }
 else
 {
@@ -57,11 +64,12 @@ bnf2tree.pl [options]
 	-cooked_tree_file aTextFileName
 	-help
 	-logger aLog::HandlerObject
+	-marpa_bnf_file aMarpaBNFFileName
 	-maxlevel logOption1
 	-minlevel logOption2
-	-marpa_bnf_file aMarpaSLIF-DSLFileName
+	-output_hashref Boolean
 	-raw_tree_file aTextFileName
-	-user_bnf_file aUserSLIF-DSLFileName
+	-user_bnf_file aUserBNFFileName
 
 Exit value: 0 for success, 1 for failure. Die upon error.
 
@@ -95,15 +103,11 @@ Set this to '' to stop logging.
 
 Default: undef.
 
-=item o -marpa_bnf_file aMarpaSLIF-DSLFileName
+=item o -marpa_bnf_file aMarpaBNFFileName
 
-Specify the name of Marpa's own SLIF-DSL file.
+Specify the name of Marpa's own BNF file.
 
-This file ships with L<Marpa::R2>, in the meta/ directory. It's name is metag.bnf.
-
-A copy, as of Marpa::R2 V 2.066000, ships with L<MarpaX::Grammar::Parser>.
-
-See share/metag.bnf.
+This file ships with L<Marpa::R2>'s file as share/metag.bnf.
 
 This option is mandatory.
 
@@ -113,19 +117,29 @@ Default: ''.
 
 This option affects Log::Handler.
 
-See the Log::handler docs.
+See the L<Log::Handler> docs.
 
-Default: 'info'.
+Nothing is printed by default.
+
+Default: 'notice'.
 
 =item o -minlevel logOption2
 
 This option affects Log::Handler.
 
-See the Log::handler docs.
+See the L<Log::Handler> docs.
 
 Default: 'error'.
 
 No lower levels are used.
+
+=item o -output_hashref Boolean
+
+Log (1) or skip (0) the hashref version of the cooked tree.
+
+Note: This needs -maxlevel elevated from its default value of 'notice' to 'info', to do anything.
+
+Default: 0.
 
 =item o -raw_tree_file aTextFileName
 
@@ -135,7 +149,7 @@ If '', the file is not written.
 
 Default: ''.
 
-=item o -user_bnf_file aUserSLIF-DSLFileName
+=item o -user_bnf_file aUserBNFFileName
 
 Specify the name of the file containing your Marpa::R2-style grammar.
 
